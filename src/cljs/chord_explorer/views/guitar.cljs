@@ -2,6 +2,7 @@
   "SVG-based guitar chord diagram and fretboard renderer."
   (:require [re-frame.core :as rf]
             [chord-explorer.theory.core :as core]
+            [chord-explorer.theory.chords :as chords]
             [chord-explorer.theory.guitar :as guitar-theory]))
 
 ;; =============================================================================
@@ -323,41 +324,65 @@
                :fill "#8c8478"}
         (str fret)])]))
 
+(def chord-tone-colors
+  "Colors for different chord tones."
+  {:root "#4f46e5"       ; Indigo - chord root
+   :third "#e11d48"      ; Rose - third
+   :second "#e11d48"     ; Rose - sus2/sus4 (replaces third)
+   :fifth "#059669"      ; Emerald - fifth
+   :seventh "#d97706"    ; Amber - seventh
+   :ninth "#8b5cf6"      ; Violet - ninth
+   :eleventh "#06b6d4"   ; Cyan - eleventh
+   :thirteenth "#ec4899" ; Pink - thirteenth
+   :extension "#8b5cf6"  ; Violet - other extensions
+   :scale-root "#0891b2" ; Cyan - scale root (tonic)
+   :scale "#2d2a26"      ; Dark - scale tone
+   :inactive "#d0c8bc"}) ; Light grey - inactive
+
 (defn scale-note-dot
   "Draw a scale note on the fretboard."
-  [string fret is-root? is-chord-note? degree in-position?]
+  [string fret is-scale-root? chord-tone-type degree in-position?]
   (let [{:keys [margin-left margin-top string-spacing fret-spacing dot-radius]} fretboard-config
         ;; String 1 = high E (bottom), String 6 = low E (top)
         y (+ margin-top (* (- 6 string) string-spacing))
         x (if (= fret 0)
             (- margin-left 15)
             (+ margin-left (* fret fret-spacing) (- (/ fret-spacing 2))))
-        ;; Greyed out colors for notes outside position
+        ;; Determine fill color based on chord tone type and scale root
+        ;; Priority: chord-tone-type > scale-root > scale
         fill-color (if in-position?
                      (cond
-                       is-root? "#4f46e5"
-                       is-chord-note? "#e11d48"
-                       :else "#2d2a26")
-                     "#d0c8bc")  ;; Light grey for out-of-position notes
+                       ;; Chord tone takes priority (including chord root)
+                       chord-tone-type
+                       (get chord-tone-colors chord-tone-type (:scale chord-tone-colors))
+                       ;; Scale root (tonic) when not a chord tone
+                       is-scale-root?
+                       (:scale-root chord-tone-colors)
+                       ;; Regular scale tone
+                       :else
+                       (:scale chord-tone-colors))
+                     (:inactive chord-tone-colors))
         text-color (if in-position? "white" "#8c8478")
+        is-chord-tone? (boolean chord-tone-type)
         r (if in-position?
             (cond
-              is-root? (+ dot-radius 2)
-              is-chord-note? (+ dot-radius 1)
+              (= chord-tone-type :root) (+ dot-radius 2)
+              is-chord-tone? (+ dot-radius 1)
+              is-scale-root? (+ dot-radius 2)
               :else dot-radius)
-            (- dot-radius 2))]  ;; Smaller dots for out-of-position
+            (- dot-radius 2))]
     [:g.scale-note
      [:circle {:cx x
                :cy y
                :r r
                :fill fill-color
                :opacity (if in-position? 1 0.5)}]
-     (when in-position?  ;; Only show degree numbers for in-position notes
+     (when in-position?
        [:text {:x x
                :y (+ y 4)
                :text-anchor "middle"
                :font-size "10px"
-               :font-weight (if (or is-root? is-chord-note?) "bold" "normal")
+               :font-weight (if (or is-scale-root? is-chord-tone?) "bold" "normal")
                :font-family "sans-serif"
                :fill text-color}
         (str degree)])]))
@@ -395,7 +420,8 @@
   "Full fretboard display showing the current scale."
   []
   (let [all-scale-notes @(rf/subscribe [:scale-fretboard-with-position])
-        chord-notes-set @(rf/subscribe [:selected-chord-notes-set])
+        chord-tones-map @(rf/subscribe [:selected-chord-tones-map])
+        selected-chord @(rf/subscribe [:selected-chord])
         key-display @(rf/subscribe [:key-display])
         {:keys [width height margin-left fret-spacing num-frets]} fretboard-config
         total-width (+ margin-left (* num-frets fret-spacing) 20)]
@@ -403,7 +429,12 @@
     [:div.card
      [:div.card-header
       [:h3 "Scale on Fretboard"]
-      [:span.scale-name (:name key-display)]]
+      [:div.fretboard-header-info
+       [:span.scale-name (:name key-display)]
+       (when selected-chord
+         [:span.selected-chord-badge
+          (str "Chord: " (name (:root selected-chord))
+               (:symbol (chords/get-chord-def (:type selected-chord))))])]]
      [:div.card-body
       ;; Position selector
       [position-selector]
@@ -423,19 +454,39 @@
        ;; Scale notes - render out-of-position notes first (so in-position are on top)
        (let [sorted-notes (sort-by (fn [n] (if (:in-position? n) 1 0)) all-scale-notes)]
          (for [{:keys [string fret note degree is-root? in-position?]} sorted-notes]
-           (let [is-chord-note? (and chord-notes-set
-                                     in-position?
-                                     (contains? chord-notes-set (core/normalize-note note)))]
+           (let [;; Look up chord tone type from the map (nil if not a chord tone)
+                 note-semitone (core/normalize-note note)
+                 chord-tone-type (when (and chord-tones-map in-position?)
+                                   (get chord-tones-map note-semitone))]
              ^{:key (str string "-" fret)}
-             [scale-note-dot string fret is-root? is-chord-note? degree in-position?])))]]
+             [scale-note-dot string fret is-root? chord-tone-type degree in-position?])))]]
 
-     ;; Legend
+     ;; Legend - show chord tone colors when a chord is selected
      [:div.fretboard-legend
-      [:span.legend-item
-       [:span.dot.root] "Root"]
-      [:span.legend-item
-       [:span.dot.chord] "Chord tone"]
-      [:span.legend-item
-       [:span.dot.scale] "Scale tone"]
-      [:span.legend-item
-       [:span.dot.inactive] "Other positions"]]]))
+      (if chord-tones-map
+        ;; Chord selected - show chord tone legend
+        [:<>
+         [:span.legend-item
+          [:span.dot {:style {:background-color (:scale-root chord-tone-colors)}}] "Tonic"]
+         [:span.legend-item
+          [:span.dot {:style {:background-color (:root chord-tone-colors)}}] "Root"]
+         [:span.legend-item
+          [:span.dot {:style {:background-color (:third chord-tone-colors)}}] "3rd"]
+         [:span.legend-item
+          [:span.dot {:style {:background-color (:fifth chord-tone-colors)}}] "5th"]
+         [:span.legend-item
+          [:span.dot {:style {:background-color (:seventh chord-tone-colors)}}] "7th"]
+         [:span.legend-item
+          [:span.dot {:style {:background-color (:ninth chord-tone-colors)}}] "Ext"]
+         [:span.legend-item
+          [:span.dot {:style {:background-color (:scale chord-tone-colors)}}] "Scale"]
+         [:span.legend-item
+          [:span.dot {:style {:background-color (:inactive chord-tone-colors)}}] "Other"]]
+        ;; No chord selected - show simple legend
+        [:<>
+         [:span.legend-item
+          [:span.dot {:style {:background-color (:scale-root chord-tone-colors)}}] "Tonic"]
+         [:span.legend-item
+          [:span.dot {:style {:background-color (:scale chord-tone-colors)}}] "Scale tone"]
+         [:span.legend-item
+          [:span.dot {:style {:background-color (:inactive chord-tone-colors)}}] "Other positions"]])]]))

@@ -107,6 +107,18 @@
    (:secondary-dominants db)))
 
 (rf/reg-sub
+ :secondary-dominants-with-targets
+ :<- [:secondary-dominants]
+ :<- [:diatonic-chords]
+ (fn [[sec-doms diatonic-chords] _]
+   (when (and (seq sec-doms) (seq diatonic-chords))
+     (mapv (fn [sd]
+             (let [target-degree (get-in sd [:analysis :target-degree])
+                   target-chord (first (filter #(= (:degree %) target-degree) diatonic-chords))]
+               (assoc sd :target-chord target-chord)))
+           sec-doms))))
+
+(rf/reg-sub
  :borrowed-chords
  (fn [db _]
    (:borrowed-chords db)))
@@ -336,3 +348,33 @@
  (fn [chord _]
    (when chord
      (set (map core/normalize-note (:notes chord))))))
+
+(defn interval->chord-function
+  "Map a semitone interval to its chord function."
+  [interval]
+  (cond
+    (= interval 0) :root
+    (#{3 4} interval) :third        ; minor 3rd (3) or major 3rd (4)
+    (#{2 5} interval) :second       ; sus2 (2) or sus4 (5)
+    (#{6 7 8} interval) :fifth      ; dim5 (6), perfect 5th (7), aug5 (8)
+    (#{9 10 11} interval) :seventh  ; dim7 (9), dom7 (10), maj7 (11)
+    (#{13 14} interval) :ninth      ; b9 (13), 9 (14)
+    (#{15 16 17 18} interval) :eleventh ; 11 (17), #11 (18)
+    (#{20 21} interval) :thirteenth ; b13 (20), 13 (21)
+    :else :extension))
+
+(rf/reg-sub
+ :selected-chord-tones-map
+ :<- [:selected-chord]
+ (fn [chord _]
+   (when chord
+     (let [chord-def (chords/get-chord-def (:type chord))
+           intervals (:intervals chord-def)
+           root-semitone (core/normalize-note (:root chord))]
+       ;; Create a map of semitone -> chord function
+       (into {}
+             (map-indexed
+              (fn [idx interval]
+                (let [note-semitone (mod (+ root-semitone interval) 12)]
+                  [note-semitone (interval->chord-function interval)]))
+              intervals))))))

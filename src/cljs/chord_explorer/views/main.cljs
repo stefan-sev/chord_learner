@@ -137,23 +137,33 @@
           [:span.numeral (:numeral chord)]])]]]))
 
 (defn secondary-dominants-palette
-  "Display secondary dominants."
+  "Display secondary dominants with their target chords."
   []
-  (let [sec-doms @(rf/subscribe [:secondary-dominants])]
+  (let [sec-doms @(rf/subscribe [:secondary-dominants-with-targets])]
     (when (seq sec-doms)
       [:div.card
        [:div.card-header
         [:h3 "Secondary Dominants"]]
        [:div.card-body
-        [:div.chip-row
+        [:div.sec-dom-grid
          (for [sd sec-doms]
-           ^{:key (str (:root sd) "-" (get-in sd [:analysis :target-degree]))}
-           [:button.borrowed-chip.secondary-dominant
-            {:on-click #(rf/dispatch [:add-chord-to-progression
-                                      {:root (:root sd)
-                                       :type (:type sd)}])}
-            [:span (str (get-in sd [:analysis :notation])
-                        " (" (name (:root sd)) "7)")]])]]])))
+           (let [target (:target-chord sd)
+                 target-function (when target (name (:function target)))]
+             ^{:key (str (:root sd) "-" (get-in sd [:analysis :target-degree]))}
+             [:div.sec-dom-item
+              {:class target-function}
+              [:button.sec-dom-chip
+               {:on-click #(rf/dispatch [:add-chord-to-progression
+                                         {:root (:root sd)
+                                          :type (:type sd)}])}
+               [:span.sec-dom-notation (get-in sd [:analysis :notation])]
+               [:span.sec-dom-chord (str (name (:root sd)) "7")]]
+              [:span.sec-dom-arrow "\u2192"]
+              [:span.sec-dom-target
+               {:class target-function}
+               (when target
+                 (str (name (:root target))
+                      (:symbol (chord-explorer.theory.chords/get-chord-def (:type target)))))]]))]]])))
 
 (defn modal-interchange-palette
   "Display borrowed chords."
