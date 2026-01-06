@@ -240,6 +240,9 @@
    ;; Sheet Music Display
    [sheet-music/staff-display]
 
+   ;; Scale Fretboard
+   [guitar-view/scale-fretboard]
+
    ;; Chord Palettes
    [diatonic-chord-palette]
    [secondary-dominants-palette]

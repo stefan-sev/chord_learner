@@ -361,3 +361,8 @@
  :toggle-load-modal
  (fn [db _]
    (update db :show-load-modal? not)))
+
+(rf/reg-event-db
+ :set-fretboard-position
+ (fn [db [_ position]]
+   (assoc db :selected-fretboard-position position)))

@@ -1004,6 +1004,73 @@ h1, h2, h3, h4 {
 }
 
 /* =============================================================================
+   Scale Fretboard
+   ============================================================================= */
+
+.fretboard {
+  width: 100%;
+  height: auto;
+  overflow-x: auto;
+}
+
+.position-selector {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--spacing-xs);
+  margin-bottom: var(--spacing-md);
+}
+
+.position-selector .btn {
+  font-size: 11px;
+  padding: var(--spacing-xs) var(--spacing-sm);
+}
+
+.position-selector .btn.active {
+  background: var(--accent-indigo);
+  color: white;
+}
+
+.scale-name {
+  font-size: 12px;
+  color: var(--text-light);
+  font-weight: normal;
+}
+
+.fretboard-legend {
+  display: flex;
+  gap: var(--spacing-md);
+  margin-top: var(--spacing-md);
+  padding-top: var(--spacing-md);
+  border-top: 1px solid var(--border-light);
+}
+
+.legend-item {
+  display: flex;
+  align-items: center;
+  gap: var(--spacing-xs);
+  font-size: 12px;
+  color: var(--text-medium);
+}
+
+.legend-item .dot {
+  width: 12px;
+  height: 12px;
+  border-radius: 50%;
+}
+
+.legend-item .dot.root {
+  background: #4f46e5;
+}
+
+.legend-item .dot.chord {
+  background: #e11d48;
+}
+
+.legend-item .dot.scale {
+  background: #2d2a26;
+}
+
+/* =============================================================================
    Responsive
    ============================================================================= */
 

@@ -1,6 +1,7 @@
 (ns chord-explorer.subs
   "Re-frame subscriptions."
   (:require [re-frame.core :as rf]
+            [chord-explorer.theory.core :as core]
             [chord-explorer.theory.scales :as scales]
             [chord-explorer.theory.chords :as chords]
             [chord-explorer.theory.voicings :as voicings]
@@ -280,3 +281,43 @@
  :<- [:progression]
  (fn [progression _]
    (:id progression)))
+
+;; =============================================================================
+;; Scale Fretboard
+;; =============================================================================
+
+(rf/reg-sub
+ :scale-fretboard-notes
+ :<- [:current-scale-notes]
+ (fn [scale-notes _]
+   (when (seq scale-notes)
+     (guitar/scale-notes-on-fretboard scale-notes))))
+
+(rf/reg-sub
+ :scale-positions
+ :<- [:current-scale-notes]
+ (fn [scale-notes _]
+   (when (seq scale-notes)
+     (guitar/scale-positions scale-notes))))
+
+(rf/reg-sub
+ :selected-fretboard-position
+ (fn [db _]
+   (or (:selected-fretboard-position db) "Open")))
+
+(rf/reg-sub
+ :scale-in-selected-position
+ :<- [:current-scale-notes]
+ :<- [:selected-fretboard-position]
+ (fn [[scale-notes position] _]
+   (when (seq scale-notes)
+     (let [positions (guitar/scale-positions scale-notes)
+           pos-data (get positions position)]
+       (:notes pos-data)))))
+
+(rf/reg-sub
+ :selected-chord-notes-set
+ :<- [:selected-chord]
+ (fn [chord _]
+   (when chord
+     (set (map core/normalize-note (:notes chord))))))

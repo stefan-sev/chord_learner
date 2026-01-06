@@ -436,3 +436,75 @@
    :difficulty (:difficulty voicing)
    :muted (mapv #(= % -1) (:frets voicing))
    :open (mapv #(= % 0) (:frets voicing))})
+
+;; =============================================================================
+;; Scale Fretboard Functions
+;; =============================================================================
+
+(defn scale-notes-on-fretboard
+  "Get all positions of scale notes on the fretboard.
+   Returns a sequence of {:string :fret :note :degree :is-root?}."
+  ([scale-notes]
+   (scale-notes-on-fretboard scale-notes standard-tuning 15))
+  ([scale-notes tuning]
+   (scale-notes-on-fretboard scale-notes tuning 15))
+  ([scale-notes tuning max-fret]
+   (let [root-note (first scale-notes)
+         root-semitone (core/normalize-note root-note)]
+     (for [note scale-notes
+           :let [degree (inc (.indexOf scale-notes note))
+                 positions (note-to-frets note tuning max-fret)]
+           pos positions]
+       (assoc pos
+              :note note
+              :degree degree
+              :is-root? (= (core/normalize-note note) root-semitone))))))
+
+(defn scale-positions
+  "Get scale notes organized by position (CAGED-style boxes).
+   Returns map of {:position-name {:start-fret :end-fret :notes [...]}}"
+  ([scale-notes]
+   (scale-positions scale-notes standard-tuning))
+  ([scale-notes tuning]
+   (let [all-notes (scale-notes-on-fretboard scale-notes tuning 15)
+         ;; Define position ranges (roughly based on CAGED)
+         position-ranges [{:name "Open" :start 0 :end 3}
+                          {:name "Position 2" :start 2 :end 5}
+                          {:name "Position 3" :start 4 :end 7}
+                          {:name "Position 4" :start 7 :end 10}
+                          {:name "Position 5" :start 9 :end 12}
+                          {:name "Position 6" :start 12 :end 15}]]
+     (into {}
+           (for [{:keys [name start end]} position-ranges]
+             [name {:start-fret start
+                    :end-fret end
+                    :notes (filterv #(<= start (:fret %) end) all-notes)}])))))
+
+(defn scale-in-position
+  "Get scale notes within a specific fret range."
+  ([scale-notes start-fret end-fret]
+   (scale-in-position scale-notes start-fret end-fret standard-tuning))
+  ([scale-notes start-fret end-fret tuning]
+   (let [all-notes (scale-notes-on-fretboard scale-notes tuning (+ end-fret 2))]
+     (filterv #(<= start-fret (:fret %) end-fret) all-notes))))
+
+(defn three-notes-per-string
+  "Generate a 3-notes-per-string fingering pattern.
+   Returns notes organized by string."
+  ([scale-notes start-fret]
+   (three-notes-per-string scale-notes start-fret standard-tuning))
+  ([scale-notes start-fret tuning]
+   (let [all-notes (scale-notes-on-fretboard scale-notes tuning (+ start-fret 6))
+         ;; Group by string
+         by-string (group-by :string all-notes)]
+     (into {}
+           (for [string (range 1 7)]
+             [string (->> (get by-string string [])
+                          (filter #(<= start-fret (:fret %)))
+                          (sort-by :fret)
+                          (take 3)
+                          vec)])))))
+
+(def position-names
+  "Named positions on the fretboard."
+  ["Open" "Position 2" "Position 3" "Position 4" "Position 5" "Position 6"])
