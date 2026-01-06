@@ -325,35 +325,42 @@
 
 (defn scale-note-dot
   "Draw a scale note on the fretboard."
-  [string fret is-root? is-chord-note? degree]
+  [string fret is-root? is-chord-note? degree in-position?]
   (let [{:keys [margin-left margin-top string-spacing fret-spacing dot-radius]} fretboard-config
         ;; String 1 = high E (bottom), String 6 = low E (top)
         y (+ margin-top (* (- 6 string) string-spacing))
         x (if (= fret 0)
             (- margin-left 15)
             (+ margin-left (* fret fret-spacing) (- (/ fret-spacing 2))))
-        fill-color (cond
-                     is-root? "#4f46e5"
-                     is-chord-note? "#e11d48"
-                     :else "#2d2a26")
-        r (cond
-            is-root? (+ dot-radius 2)
-            is-chord-note? (+ dot-radius 1)
-            :else dot-radius)]
+        ;; Greyed out colors for notes outside position
+        fill-color (if in-position?
+                     (cond
+                       is-root? "#4f46e5"
+                       is-chord-note? "#e11d48"
+                       :else "#2d2a26")
+                     "#d0c8bc")  ;; Light grey for out-of-position notes
+        text-color (if in-position? "white" "#8c8478")
+        r (if in-position?
+            (cond
+              is-root? (+ dot-radius 2)
+              is-chord-note? (+ dot-radius 1)
+              :else dot-radius)
+            (- dot-radius 2))]  ;; Smaller dots for out-of-position
     [:g.scale-note
      [:circle {:cx x
                :cy y
                :r r
                :fill fill-color
-               :opacity (if is-chord-note? 1 0.85)}]
-     [:text {:x x
-             :y (+ y 4)
-             :text-anchor "middle"
-             :font-size "10px"
-             :font-weight (if (or is-root? is-chord-note?) "bold" "normal")
-             :font-family "sans-serif"
-             :fill "white"}
-      (str degree)]]))
+               :opacity (if in-position? 1 0.5)}]
+     (when in-position?  ;; Only show degree numbers for in-position notes
+       [:text {:x x
+               :y (+ y 4)
+               :text-anchor "middle"
+               :font-size "10px"
+               :font-weight (if (or is-root? is-chord-note?) "bold" "normal")
+               :font-family "sans-serif"
+               :fill text-color}
+        (str degree)])]))
 
 (defn string-labels
   "Draw string note labels (E A D G B E)."
@@ -387,7 +394,7 @@
 (defn scale-fretboard
   "Full fretboard display showing the current scale."
   []
-  (let [scale-notes @(rf/subscribe [:scale-in-selected-position])
+  (let [all-scale-notes @(rf/subscribe [:scale-fretboard-with-position])
         chord-notes-set @(rf/subscribe [:selected-chord-notes-set])
         key-display @(rf/subscribe [:key-display])
         {:keys [width height margin-left fret-spacing num-frets]} fretboard-config
@@ -413,12 +420,14 @@
        [string-labels]
        [fret-numbers]
 
-       ;; Scale notes
-       (for [{:keys [string fret note degree is-root?]} scale-notes]
-         (let [is-chord-note? (and chord-notes-set
-                                   (contains? chord-notes-set (core/normalize-note note)))]
-           ^{:key (str string "-" fret)}
-           [scale-note-dot string fret is-root? is-chord-note? degree]))]]
+       ;; Scale notes - render out-of-position notes first (so in-position are on top)
+       (let [sorted-notes (sort-by (fn [n] (if (:in-position? n) 1 0)) all-scale-notes)]
+         (for [{:keys [string fret note degree is-root? in-position?]} sorted-notes]
+           (let [is-chord-note? (and chord-notes-set
+                                     in-position?
+                                     (contains? chord-notes-set (core/normalize-note note)))]
+             ^{:key (str string "-" fret)}
+             [scale-note-dot string fret is-root? is-chord-note? degree in-position?])))]]
 
      ;; Legend
      [:div.fretboard-legend
@@ -427,4 +436,6 @@
       [:span.legend-item
        [:span.dot.chord] "Chord tone"]
       [:span.legend-item
-       [:span.dot.scale] "Scale tone"]]]))
+       [:span.dot.scale] "Scale tone"]
+      [:span.legend-item
+       [:span.dot.inactive] "Other positions"]]]))

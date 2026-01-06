@@ -316,6 +316,21 @@
        (:notes pos-data)))))
 
 (rf/reg-sub
+ :scale-fretboard-with-position
+ :<- [:current-scale-notes]
+ :<- [:selected-fretboard-position]
+ (fn [[scale-notes position] _]
+   (when (seq scale-notes)
+     (let [all-notes (guitar/scale-notes-on-fretboard scale-notes)
+           positions (guitar/scale-positions scale-notes)
+           pos-data (get positions position)
+           start-fret (:start-fret pos-data)
+           end-fret (:end-fret pos-data)]
+       (mapv (fn [note]
+               (assoc note :in-position? (<= start-fret (:fret note) end-fret)))
+             all-notes)))))
+
+(rf/reg-sub
  :selected-chord-notes-set
  :<- [:selected-chord]
  (fn [chord _]

@@ -450,15 +450,25 @@
    (scale-notes-on-fretboard scale-notes tuning 15))
   ([scale-notes tuning max-fret]
    (let [root-note (first scale-notes)
-         root-semitone (core/normalize-note root-note)]
-     (for [note scale-notes
-           :let [degree (inc (.indexOf scale-notes note))
-                 positions (note-to-frets note tuning max-fret)]
-           pos positions]
-       (assoc pos
-              :note note
-              :degree degree
-              :is-root? (= (core/normalize-note note) root-semitone))))))
+         root-semitone (core/normalize-note root-note)
+         ;; Create a map of normalized semitone -> degree for lookup
+         semitone->degree (into {}
+                                (map-indexed
+                                 (fn [idx note]
+                                   [(core/normalize-note note) (inc idx)])
+                                 scale-notes))
+         ;; Get all scale note semitones for matching
+         scale-semitones (set (map core/normalize-note scale-notes))]
+     (for [string (range 1 (inc (count tuning)))
+           fret (range 0 (inc max-fret))
+           :let [note (fret-to-note string fret tuning)
+                 note-semitone (core/normalize-note note)]
+           :when (contains? scale-semitones note-semitone)]
+       {:string string
+        :fret fret
+        :note note
+        :degree (get semitone->degree note-semitone)
+        :is-root? (= note-semitone root-semitone)}))))
 
 (defn scale-positions
   "Get scale notes organized by position (CAGED-style boxes).
