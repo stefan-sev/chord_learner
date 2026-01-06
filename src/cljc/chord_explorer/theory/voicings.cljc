@@ -339,6 +339,91 @@
                  (rest remaining)))))))
 
 ;; =============================================================================
+;; Inversion Detection
+;; =============================================================================
+
+(defn detect-inversion
+  "Detect the inversion of a voicing based on the bass note.
+   Returns :root, :first, :second, :third, or nil."
+  [voicing]
+  (when voicing
+    (let [root (:root voicing)
+          chord-type (:chord-type voicing)
+          voiced-notes (:notes voicing)
+          chord-def (chords/get-chord-def chord-type)
+          intervals (:intervals chord-def)]
+      (when (and (seq voiced-notes) (seq intervals))
+        (let [;; Get the bass note (lowest in the voicing)
+              bass-note (:note (first (sort-by #(core/note->midi %) voiced-notes)))
+              bass-semitone (core/normalize-note bass-note)
+              root-semitone (core/normalize-note root)
+              ;; Calculate interval from root to bass
+              bass-interval (mod (- bass-semitone root-semitone) 12)
+              ;; Map intervals to inversion names
+              third-intervals #{3 4}       ; minor 3rd, major 3rd
+              fifth-intervals #{6 7 8}     ; dim5, P5, aug5
+              seventh-intervals #{9 10 11}] ; dim7, dom7, maj7
+          (cond
+            (= bass-interval 0) :root
+            (third-intervals bass-interval) :first
+            (fifth-intervals bass-interval) :second
+            (and (>= (count intervals) 4)
+                 (seventh-intervals bass-interval)) :third
+            :else :root))))))
+
+(def inversion-names
+  "Display names for inversions."
+  {:root "Root Position"
+   :first "1st Inversion"
+   :second "2nd Inversion"
+   :third "3rd Inversion"})
+
+(def inversion-short-names
+  "Short display names for inversions."
+  {:root "Root"
+   :first "1st Inv"
+   :second "2nd Inv"
+   :third "3rd Inv"})
+
+;; =============================================================================
+;; Inversion Generation
+;; =============================================================================
+
+(defn- rotate-notes
+  "Rotate chord notes to create an inversion."
+  [notes n]
+  (let [notes-vec (vec notes)
+        count-notes (count notes-vec)]
+    (vec (concat (drop n notes-vec) (take n notes-vec)))))
+
+(defn generate-inversions
+  "Generate all inversions for a chord.
+   Returns a vector of voicings, one for each inversion."
+  ([root chord-type]
+   (generate-inversions root chord-type {:base-octave 4}))
+  ([root chord-type {:keys [base-octave] :or {base-octave 4}}]
+   (let [notes (chords/build-chord root chord-type)
+         num-notes (count notes)]
+     (when (>= num-notes 3)
+       (vec
+        (for [inv-num (range num-notes)]
+          (let [rotated (rotate-notes notes inv-num)
+                voiced (notes-to-voiced rotated base-octave)
+                inversion (case inv-num
+                            0 :root
+                            1 :first
+                            2 :second
+                            3 :third
+                            :root)]
+            {:root root
+             :chord-type chord-type
+             :voicing-type :close
+             :notes voiced
+             :inversion inversion
+             :inversion-num inv-num
+             :hand :both})))))))
+
+;; =============================================================================
 ;; Voicing Display
 ;; =============================================================================
 
@@ -346,10 +431,14 @@
   "Convert a voicing to display information."
   [voicing]
   (when voicing
-    {:name (get-in voicing-types [(:voicing-type voicing) :name])
-     :description (get-in voicing-types [(:voicing-type voicing) :description])
-     :complexity (get-in voicing-types [(:voicing-type voicing) :complexity])
-     :notes (mapv (fn [{:keys [note octave]}]
-                    (str (name note) octave))
-                  (:notes voicing))
-     :hand (:hand voicing)}))
+    (let [inversion (or (:inversion voicing) (detect-inversion voicing))]
+      {:name (get-in voicing-types [(:voicing-type voicing) :name])
+       :description (get-in voicing-types [(:voicing-type voicing) :description])
+       :complexity (get-in voicing-types [(:voicing-type voicing) :complexity])
+       :notes (mapv (fn [{:keys [note octave]}]
+                      (str (name note) octave))
+                    (:notes voicing))
+       :hand (:hand voicing)
+       :inversion inversion
+       :inversion-name (get inversion-names inversion)
+       :inversion-short (get inversion-short-names inversion)})))

@@ -3,6 +3,9 @@
   (:require [chord-explorer.theory.core :as core]
             [chord-explorer.theory.chords :as chords]))
 
+;; Forward declaration for functions used before definition
+(declare detect-guitar-inversion)
+
 ;; =============================================================================
 ;; Tuning Definitions
 ;; =============================================================================
@@ -60,6 +63,275 @@
        {:string string :fret fret}))))
 
 ;; =============================================================================
+;; Combinatorics Helpers for Voicing Generation
+;; =============================================================================
+
+(defn- combinations
+  "Generate all combinations of n items from coll."
+  [coll n]
+  (cond
+    (zero? n) [[]]
+    (empty? coll) []
+    :else (concat
+           (map #(cons (first coll) %)
+                (combinations (rest coll) (dec n)))
+           (combinations (rest coll) n))))
+
+(defn- permutations
+  "Generate all permutations of coll."
+  [coll]
+  (if (empty? coll)
+    [[]]
+    (for [x coll
+          p (permutations (remove #{x} coll))]
+      (cons x p))))
+
+(defn- cartesian-product
+  "Generate cartesian product of multiple collections."
+  [& colls]
+  (if (empty? colls)
+    [[]]
+    (for [x (first colls)
+          xs (apply cartesian-product (rest colls))]
+      (cons x xs))))
+
+;; =============================================================================
+;; String Combination Generator
+;; =============================================================================
+
+(def ^:private all-strings [1 2 3 4 5 6])
+
+(defn- valid-string-combinations
+  "Generate all valid 3-4 string combinations for voicings.
+   Returns list of sets like #{1 2 3}, #{1 2 4}, etc."
+  []
+  (concat
+   (map set (combinations all-strings 3))
+   (map set (combinations all-strings 4))))
+
+;; Pre-compute string combinations for performance
+(def ^:private string-combos (valid-string-combinations))
+
+;; =============================================================================
+;; Chord Tone Position Finder
+;; =============================================================================
+
+(defn- chord-tone-positions
+  "Find all fret positions for each chord tone.
+   Returns map: {interval -> [{:string :fret :interval} ...]}"
+  [root intervals tuning max-fret]
+  (into {}
+        (for [interval intervals]
+          (let [note (core/transpose root interval)
+                positions (note-to-frets note tuning max-fret)]
+            [interval (mapv #(assoc % :interval interval) positions)]))))
+
+;; =============================================================================
+;; Voicing Generation Algorithm
+;; =============================================================================
+
+(def ^:private max-stretch 5)
+(def ^:private max-fret 12)
+
+(defn- playable?
+  "Check if a voicing meets playability constraints."
+  [fret-positions]
+  (let [frets (map :fret fret-positions)
+        non-open (filter pos? frets)]
+    (and
+     ;; Must have positions
+     (seq fret-positions)
+     ;; All frets within range
+     (every? #(<= 0 % max-fret) frets)
+     ;; Max stretch constraint (only for fretted notes)
+     (or (empty? non-open)
+         (<= (- (apply max non-open) (apply min non-open)) max-stretch))
+     ;; Max 4 fretted notes
+     (<= (count non-open) 4))))
+
+(defn- calculate-voicing-difficulty
+  "Assign difficulty based on voicing characteristics."
+  [fret-positions]
+  (let [frets (map :fret fret-positions)
+        non-open (filter pos? frets)
+        has-open? (some zero? frets)
+        stretch (if (seq non-open)
+                  (- (apply max non-open) (apply min non-open))
+                  0)
+        min-fret (if (seq non-open) (apply min non-open) 0)]
+    (cond
+      (and (< stretch 2) has-open?) :easy
+      (and (<= stretch 3) (<= min-fret 5)) :medium
+      :else :hard)))
+
+(defn- determine-voicing-category
+  "Categorize voicing as :open, :barre, :partial, or :jazz"
+  [frets-vec position]
+  (let [played (filter #(>= % 0) frets-vec)
+        has-open? (some zero? played)
+        num-muted (count (filter #(= % -1) frets-vec))]
+    (cond
+      (and has-open? (= position 0)) :open
+      (>= num-muted 3) :partial
+      (> position 0) :barre
+      :else :jazz)))
+
+(defn- generate-voicing-name
+  "Generate a descriptive name for a voicing."
+  [root chord-type position inversion]
+  (let [chord-def (chords/get-chord-def chord-type)
+        symbol-str (:symbol chord-def)
+        inv-suffix (case inversion
+                     :first "/3"
+                     :second "/5"
+                     :third "/7"
+                     "")]
+    (str (name root) symbol-str inv-suffix
+         (when (pos? position) (str " (Pos " position ")")))))
+
+(defn- fret-positions->voicing-struct
+  "Convert fret positions to the voicing format expected by the UI."
+  [root chord-type fret-positions tuning]
+  (let [;; Build 6-element frets vector: -1 for muted, fret number for played
+        ;; fret-positions have :string (1-6, 1=high E) and we need index (0=low E)
+        ;; String 1 = high E = index 5, String 6 = low E = index 0
+        frets-vec (reduce
+                   (fn [acc {:keys [string fret]}]
+                     (assoc acc (- 6 string) fret))
+                   [-1 -1 -1 -1 -1 -1]
+                   fret-positions)
+        played-frets (filter pos? (map :fret fret-positions))
+        position (if (seq played-frets) (apply min played-frets) 0)
+        difficulty (calculate-voicing-difficulty fret-positions)
+        category (determine-voicing-category frets-vec position)
+        ;; Create a temporary voicing to detect inversion
+        temp-voicing {:root root :chord-type chord-type :frets frets-vec}
+        inversion (detect-guitar-inversion temp-voicing tuning)]
+    {:root root
+     :chord-type chord-type
+     :name (generate-voicing-name root chord-type position inversion)
+     :frets frets-vec
+     :fingers nil
+     :barre nil
+     :position position
+     :difficulty difficulty
+     :category category}))
+
+(defn- generate-voicings-for-string-set
+  "Generate all valid voicings for a specific string combination."
+  [root chord-type intervals string-set tone-positions tuning]
+  (let [strings (vec (sort string-set))
+        num-strings (count strings)
+        num-tones (count intervals)]
+    (when (= num-strings num-tones)
+      ;; Generate all permutations of intervals to strings
+      (for [perm (permutations intervals)
+            :let [;; For each (string, interval) assignment, get valid fret positions
+                  fret-options (map (fn [string interval]
+                                      (filter #(= (:string %) string)
+                                              (get tone-positions interval)))
+                                    strings perm)]
+            ;; Only proceed if all strings have at least one option
+            :when (every? seq fret-options)
+            ;; Generate cartesian product of all valid positions
+            voicing-positions (apply cartesian-product fret-options)
+            :when (playable? voicing-positions)]
+        (fret-positions->voicing-struct root chord-type voicing-positions tuning)))))
+
+(defn- select-essential-tones
+  "For chords with >4 notes, select the most important tones.
+   Priority: root > 3rd > 7th > 5th > extensions"
+  [intervals num-tones]
+  (let [prioritized (sort-by
+                     (fn [i]
+                       (cond
+                         (= i 0) 0       ; root - highest priority
+                         (#{3 4} i) 1    ; 3rd
+                         (#{10 11} i) 2  ; 7th
+                         (#{6 7 8} i) 3  ; 5th
+                         :else 4))       ; extensions
+                     intervals)]
+    (take num-tones prioritized)))
+
+(defn- generate-all-voicings
+  "Generate all valid voicings for a chord."
+  ([root chord-type]
+   (generate-all-voicings root chord-type standard-tuning max-fret))
+  ([root chord-type tuning search-max-fret]
+   (let [chord-def (chords/get-chord-def chord-type)]
+     (when chord-def
+       (let [intervals (:intervals chord-def)
+             num-tones (count intervals)]
+         (cond
+           ;; Not enough notes
+           (< num-tones 2) []
+
+           ;; Dyads (2 notes) - use 2-string combinations
+           (= num-tones 2)
+           (let [tone-positions (chord-tone-positions root intervals tuning search-max-fret)
+                 string-combos-2 (map set (combinations all-strings 2))]
+             (->> string-combos-2
+                  (mapcat #(generate-voicings-for-string-set root chord-type intervals % tone-positions tuning))
+                  (remove nil?)
+                  vec))
+
+           ;; Standard triads and 7th chords (3-4 notes)
+           (<= num-tones 4)
+           (let [tone-positions (chord-tone-positions root intervals tuning search-max-fret)
+                 ;; Use string combinations that match the number of tones
+                 matching-combos (filter #(= (count %) num-tones) string-combos)]
+             (->> matching-combos
+                  (mapcat #(generate-voicings-for-string-set root chord-type intervals % tone-positions tuning))
+                  (remove nil?)
+                  vec))
+
+           ;; Extended chords (>4 notes) - select essential tones
+           :else
+           (let [;; Generate voicings for both 3 and 4 essential tones
+                 results-3 (let [essential (select-essential-tones intervals 3)
+                                 tone-positions (chord-tone-positions root essential tuning search-max-fret)
+                                 matching-combos (filter #(= (count %) 3) string-combos)]
+                             (->> matching-combos
+                                  (mapcat #(generate-voicings-for-string-set root chord-type essential % tone-positions tuning))
+                                  (remove nil?)))
+                 results-4 (let [essential (select-essential-tones intervals 4)
+                                 tone-positions (chord-tone-positions root essential tuning search-max-fret)
+                                 matching-combos (filter #(= (count %) 4) string-combos)]
+                             (->> matching-combos
+                                  (mapcat #(generate-voicings-for-string-set root chord-type essential % tone-positions tuning))
+                                  (remove nil?)))]
+             (vec (concat results-3 results-4)))))))))
+
+(defn- sort-voicings
+  "Sort voicings by position, difficulty, then inversion."
+  [voicings]
+  (sort-by (juxt :position
+                 #(case (:difficulty %) :easy 0 :medium 1 :hard 2)
+                 #(case (detect-guitar-inversion %) :root 0 :first 1 :second 2 :third 3))
+           voicings))
+
+(defn- dedupe-voicings
+  "Remove duplicate voicings based on fret positions."
+  [voicings]
+  (vals (reduce (fn [acc v]
+                  (let [key (:frets v)]
+                    (if (contains? acc key)
+                      acc
+                      (assoc acc key v))))
+                {}
+                voicings)))
+
+;; Memoize the voicing generation for performance
+(def ^:private generate-voicings-memo
+  (memoize
+   (fn [root chord-type]
+     (->> (generate-all-voicings root chord-type)
+          dedupe-voicings
+          sort-voicings
+          (take 25)
+          vec))))
+
+;; =============================================================================
 ;; Guitar Voicing Data Structure
 ;; =============================================================================
 
@@ -83,190 +355,13 @@
    :category category})
 
 ;; =============================================================================
-;; Built-in Chord Voicing Database
-;; =============================================================================
-
-(def ^:private chord-shapes
-  "Core chord shape templates. Positions are relative to root."
-  {;; CAGED Major Shapes (for transposable shapes)
-   :e-shape-major   {:frets [0 2 2 1 0 0] :root-string 6 :fingers [nil 2 3 1 nil nil]}
-   :a-shape-major   {:frets [-1 0 2 2 2 0] :root-string 5 :fingers [nil nil 1 2 3 nil]}
-   :d-shape-major   {:frets [-1 -1 0 2 3 2] :root-string 4 :fingers [nil nil nil 1 3 2]}
-   :c-shape-major   {:frets [-1 3 2 0 1 0] :root-string 5 :fingers [nil 3 2 nil 1 nil]}
-   :g-shape-major   {:frets [3 2 0 0 0 3] :root-string 6 :fingers [2 1 nil nil nil 3]}
-
-   ;; E-shape Minor
-   :e-shape-minor   {:frets [0 2 2 0 0 0] :root-string 6 :fingers [nil 2 3 nil nil nil]}
-   :a-shape-minor   {:frets [-1 0 2 2 1 0] :root-string 5 :fingers [nil nil 2 3 1 nil]}
-
-   ;; Seventh chord shapes
-   :e-shape-7       {:frets [0 2 0 1 0 0] :root-string 6}
-   :a-shape-7       {:frets [-1 0 2 0 2 0] :root-string 5}
-   :e-shape-maj7    {:frets [0 2 1 1 0 0] :root-string 6}
-   :a-shape-maj7    {:frets [-1 0 2 1 2 0] :root-string 5}
-   :e-shape-min7    {:frets [0 2 0 0 0 0] :root-string 6}
-   :a-shape-min7    {:frets [-1 0 2 0 1 0] :root-string 5}})
-
-;; Database of guitar chord voicings.
-(defonce guitar-voicing-db (atom {}))
-
-(defn- init-voicing-db!
-  "Initialize the voicing database with common chords."
-  []
-  (reset! guitar-voicing-db
-          {;; C Major voicings
-           [:C :major]
-           [(create-voicing {:root :C :chord-type :major
-                             :frets [-1 3 2 0 1 0]
-                             :fingers [nil 3 2 nil 1 nil]
-                             :category :open :difficulty :easy
-                             :name "C Major (Open)"})
-            (create-voicing {:root :C :chord-type :major
-                             :frets [8 10 10 9 8 8]
-                             :fingers [1 3 4 2 1 1]
-                             :barre {:fret 8 :from-string 1 :to-string 6}
-                             :category :barre :position 8 :difficulty :medium
-                             :name "C Major (Barre - E shape)"})]
-
-           ;; D Major voicings
-           [:D :major]
-           [(create-voicing {:root :D :chord-type :major
-                             :frets [-1 -1 0 2 3 2]
-                             :fingers [nil nil nil 1 3 2]
-                             :category :open :difficulty :easy
-                             :name "D Major (Open)"})
-            (create-voicing {:root :D :chord-type :major
-                             :frets [-1 5 7 7 7 5]
-                             :fingers [nil 1 3 3 3 1]
-                             :barre {:fret 5 :from-string 1 :to-string 5}
-                             :category :barre :position 5 :difficulty :medium
-                             :name "D Major (Barre - A shape)"})]
-
-           ;; E Major voicings
-           [:E :major]
-           [(create-voicing {:root :E :chord-type :major
-                             :frets [0 2 2 1 0 0]
-                             :fingers [nil 2 3 1 nil nil]
-                             :category :open :difficulty :easy
-                             :name "E Major (Open)"})]
-
-           ;; G Major voicings
-           [:G :major]
-           [(create-voicing {:root :G :chord-type :major
-                             :frets [3 2 0 0 0 3]
-                             :fingers [2 1 nil nil nil 3]
-                             :category :open :difficulty :easy
-                             :name "G Major (Open)"})
-            (create-voicing {:root :G :chord-type :major
-                             :frets [3 2 0 0 3 3]
-                             :fingers [2 1 nil nil 3 4]
-                             :category :open :difficulty :easy
-                             :name "G Major (Open - Alt)"})]
-
-           ;; A Major voicings
-           [:A :major]
-           [(create-voicing {:root :A :chord-type :major
-                             :frets [-1 0 2 2 2 0]
-                             :fingers [nil nil 1 2 3 nil]
-                             :category :open :difficulty :easy
-                             :name "A Major (Open)"})
-            (create-voicing {:root :A :chord-type :major
-                             :frets [5 7 7 6 5 5]
-                             :fingers [1 3 4 2 1 1]
-                             :barre {:fret 5 :from-string 1 :to-string 6}
-                             :category :barre :position 5 :difficulty :medium
-                             :name "A Major (Barre - E shape)"})]
-
-           ;; F Major voicings
-           [:F :major]
-           [(create-voicing {:root :F :chord-type :major
-                             :frets [1 3 3 2 1 1]
-                             :fingers [1 3 4 2 1 1]
-                             :barre {:fret 1 :from-string 1 :to-string 6}
-                             :category :barre :position 1 :difficulty :medium
-                             :name "F Major (Barre)"})
-            (create-voicing {:root :F :chord-type :major
-                             :frets [-1 -1 3 2 1 1]
-                             :fingers [nil nil 3 2 1 1]
-                             :barre {:fret 1 :from-string 1 :to-string 2}
-                             :category :partial :position 1 :difficulty :easy
-                             :name "F Major (Partial)"})]
-
-           ;; A minor voicings
-           [:A :minor]
-           [(create-voicing {:root :A :chord-type :minor
-                             :frets [-1 0 2 2 1 0]
-                             :fingers [nil nil 2 3 1 nil]
-                             :category :open :difficulty :easy
-                             :name "Am (Open)"})]
-
-           ;; E minor voicings
-           [:E :minor]
-           [(create-voicing {:root :E :chord-type :minor
-                             :frets [0 2 2 0 0 0]
-                             :fingers [nil 2 3 nil nil nil]
-                             :category :open :difficulty :easy
-                             :name "Em (Open)"})]
-
-           ;; D minor voicings
-           [:D :minor]
-           [(create-voicing {:root :D :chord-type :minor
-                             :frets [-1 -1 0 2 3 1]
-                             :fingers [nil nil nil 2 3 1]
-                             :category :open :difficulty :easy
-                             :name "Dm (Open)"})]
-
-           ;; G7 voicings
-           [:G :7]
-           [(create-voicing {:root :G :chord-type :7
-                             :frets [3 2 0 0 0 1]
-                             :fingers [3 2 nil nil nil 1]
-                             :category :open :difficulty :easy
-                             :name "G7 (Open)"})]
-
-           ;; C7 voicings
-           [:C :7]
-           [(create-voicing {:root :C :chord-type :7
-                             :frets [-1 3 2 3 1 0]
-                             :fingers [nil 3 2 4 1 nil]
-                             :category :open :difficulty :medium
-                             :name "C7 (Open)"})]
-
-           ;; Cmaj7 voicings
-           [:C :maj7]
-           [(create-voicing {:root :C :chord-type :maj7
-                             :frets [-1 3 2 0 0 0]
-                             :fingers [nil 3 2 nil nil nil]
-                             :category :open :difficulty :easy
-                             :name "Cmaj7 (Open)"})]
-
-           ;; Dm7 voicings
-           [:D :min7]
-           [(create-voicing {:root :D :chord-type :min7
-                             :frets [-1 -1 0 2 1 1]
-                             :fingers [nil nil nil 2 1 1]
-                             :category :open :difficulty :easy
-                             :name "Dm7 (Open)"})]
-
-           ;; Am7 voicings
-           [:A :min7]
-           [(create-voicing {:root :A :chord-type :min7
-                             :frets [-1 0 2 0 1 0]
-                             :fingers [nil nil 2 nil 1 nil]
-                             :category :open :difficulty :easy
-                             :name "Am7 (Open)"})]}))
-
-;; Initialize on load
-(init-voicing-db!)
-
-;; =============================================================================
 ;; Voicing Lookup Functions
 ;; =============================================================================
 
 (defn get-guitar-voicings
-  "Get all guitar voicings for a chord."
+  "Get all guitar voicings for a chord - algorithmically generated."
   [root chord-type]
-  (get @guitar-voicing-db [root chord-type] []))
+  (generate-voicings-memo root chord-type))
 
 (defn get-voicings-by-difficulty
   "Get voicings filtered by difficulty."
@@ -313,33 +408,6 @@
           (assoc :name (str (name new-root)
                             (:symbol (chords/get-chord-def (:chord-type voicing)))
                             " (Barre)"))))))
-
-(defn generate-barre-voicing
-  "Generate a barre chord voicing from a shape template."
-  [root chord-type shape-key]
-  (when-let [shape (get chord-shapes shape-key)]
-    (let [;; Find how many semitones to transpose
-          root-semitone (core/normalize-note root)
-          shape-root-string (:root-string shape)
-          ;; For E-shape, open = E (semitone 4)
-          ;; For A-shape, open = A (semitone 9)
-          open-root-semitone (case shape-root-string
-                               6 4   ; E
-                               5 9   ; A
-                               4 2   ; D
-                               0)
-          semitones (mod (- root-semitone open-root-semitone) 12)
-          frets (mapv #(if (>= % 0) (+ % semitones) %) (:frets shape))]
-      (create-voicing
-       {:root root
-        :chord-type chord-type
-        :frets frets
-        :fingers (:fingers shape)
-        :barre (when (pos? semitones)
-                 {:fret semitones :from-string 1 :to-string 6})
-        :category (if (pos? semitones) :barre :open)
-        :position semitones
-        :difficulty (if (pos? semitones) :medium :easy)}))))
 
 ;; =============================================================================
 ;; Voicing Analysis
@@ -405,21 +473,62 @@
                  (:position best)))))))
 
 ;; =============================================================================
-;; Voicing Registration
+;; Inversion Detection
 ;; =============================================================================
 
-(defn register-voicing!
-  "Add a custom voicing to the database."
-  [root chord-type voicing-data]
-  (let [voicing (create-voicing (assoc voicing-data :root root :chord-type chord-type))]
-    (swap! guitar-voicing-db update [root chord-type]
-           (fn [existing]
-             (conj (or existing []) voicing)))))
+(def inversion-names
+  "Display names for inversions."
+  {:root "Root Position"
+   :first "1st Inversion"
+   :second "2nd Inversion"
+   :third "3rd Inversion"})
 
-(defn clear-voicings!
-  "Clear all voicings for a chord."
-  [root chord-type]
-  (swap! guitar-voicing-db dissoc [root chord-type]))
+(def inversion-short-names
+  "Short display names for inversions."
+  {:root "Root"
+   :first "1st Inv"
+   :second "2nd Inv"
+   :third "3rd Inv"})
+
+(defn detect-guitar-inversion
+  "Detect the inversion of a guitar voicing based on the bass note.
+   Returns :root, :first, :second, :third, or nil."
+  ([voicing]
+   (detect-guitar-inversion voicing standard-tuning))
+  ([voicing tuning]
+   (when voicing
+     (let [root (:root voicing)
+           chord-type (:chord-type voicing)
+           frets (:frets voicing)
+           chord-def (chords/get-chord-def chord-type)
+           intervals (:intervals chord-def)]
+       (when (and (seq frets) (seq intervals))
+         (let [;; Find the bass note (lowest string with a fret >= 0)
+               ;; Strings are stored low to high (E A D G B E)
+               bass-string-idx (first (keep-indexed
+                                        (fn [idx fret]
+                                          (when (>= fret 0) idx))
+                                        frets))
+               bass-fret (when bass-string-idx (nth frets bass-string-idx))
+               ;; Get the open note for that string
+               open-note (when bass-string-idx (nth tuning bass-string-idx))
+               bass-note (when open-note (string-note-at-fret open-note bass-fret))
+               ;; Calculate interval from root to bass
+               bass-semitone (when bass-note (core/normalize-note bass-note))
+               root-semitone (core/normalize-note root)
+               bass-interval (when bass-semitone (mod (- bass-semitone root-semitone) 12))
+               ;; Map intervals to inversion names
+               third-intervals #{3 4}       ; minor 3rd, major 3rd
+               fifth-intervals #{6 7 8}     ; dim5, P5, aug5
+               seventh-intervals #{9 10 11}] ; dim7, dom7, maj7
+           (cond
+             (nil? bass-interval) :root
+             (= bass-interval 0) :root
+             (third-intervals bass-interval) :first
+             (fifth-intervals bass-interval) :second
+             (and (>= (count intervals) 4)
+                  (seventh-intervals bass-interval)) :third
+             :else :root)))))))
 
 ;; =============================================================================
 ;; Display Helpers
@@ -428,14 +537,18 @@
 (defn voicing->diagram-data
   "Convert a voicing to data suitable for SVG rendering."
   [voicing]
-  {:name (:name voicing)
-   :frets (:frets voicing)
-   :fingers (:fingers voicing)
-   :barre (:barre voicing)
-   :position (:position voicing)
-   :difficulty (:difficulty voicing)
-   :muted (mapv #(= % -1) (:frets voicing))
-   :open (mapv #(= % 0) (:frets voicing))})
+  (let [inversion (detect-guitar-inversion voicing)]
+    {:name (:name voicing)
+     :frets (:frets voicing)
+     :fingers (:fingers voicing)
+     :barre (:barre voicing)
+     :position (:position voicing)
+     :difficulty (:difficulty voicing)
+     :muted (mapv #(= % -1) (:frets voicing))
+     :open (mapv #(= % 0) (:frets voicing))
+     :inversion inversion
+     :inversion-name (get inversion-names inversion)
+     :inversion-short (get inversion-short-names inversion)}))
 
 ;; =============================================================================
 ;; Scale Fretboard Functions

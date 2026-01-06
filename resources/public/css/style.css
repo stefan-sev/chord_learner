@@ -780,6 +780,20 @@ h1, h2, h3, h4 {
   cursor: pointer;
 }
 
+.keyboard-container {
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-sm);
+}
+
+.keyboard-legend {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--spacing-sm) var(--spacing-md);
+  padding-top: var(--spacing-sm);
+  border-top: 1px solid var(--border-light);
+}
+
 /* =============================================================================
    Guitar Diagram
    ============================================================================= */
@@ -843,6 +857,26 @@ h1, h2, h3, h4 {
   margin-bottom: 2px;
 }
 
+.inversion-badge {
+  display: inline-block;
+  font-size: 9px;
+  font-weight: 600;
+  text-transform: uppercase;
+  padding: 1px 4px;
+  border-radius: 2px;
+  background: var(--bg-warm);
+  color: var(--text-medium);
+  margin-bottom: 4px;
+}
+
+.voicing-meta {
+  display: flex;
+  align-items: center;
+  gap: var(--spacing-xs);
+  flex-wrap: wrap;
+  margin-top: 2px;
+}
+
 .complexity {
   display: flex;
   gap: 2px;
@@ -879,6 +913,69 @@ h1, h2, h3, h4 {
 .difficulty.hard {
   background: #fee2e2;
   color: #991b1b;
+}
+
+/* Voicing Groups (grouped by inversion and position) */
+.voicing-groups {
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-lg);
+}
+
+.voicing-group {
+  border: 1px solid var(--border-light);
+  border-radius: var(--radius-lg);
+  overflow: hidden;
+}
+
+.voicing-group-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: var(--spacing-sm) var(--spacing-md);
+  background: var(--bg-warm);
+  border-bottom: 1px solid var(--border-light);
+}
+
+.voicing-group-header h4 {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--accent-indigo);
+  margin: 0;
+}
+
+.group-count {
+  font-size: 11px;
+  color: var(--text-light);
+}
+
+.voicing-group-content {
+  padding: var(--spacing-md);
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-md);
+}
+
+.position-subgroup {
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-sm);
+}
+
+.position-label {
+  font-size: 11px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  color: var(--text-light);
+  padding-bottom: var(--spacing-xs);
+  border-bottom: 1px dashed var(--border-light);
+}
+
+.voicing-row {
+  display: grid;
+  grid-template-columns: repeat(2, 1fr);
+  gap: var(--spacing-sm);
 }
 
 /* =============================================================================

@@ -230,7 +230,7 @@
             "Guitar"]]]
          [:div.card-body
           (case voicing-mode
-            :piano [keyboard/keyboard]
+            :piano [keyboard/keyboard-with-legend]
             :guitar [guitar-view/chord-diagram])]]
 
         [voicing-selector/voicing-selector]]
