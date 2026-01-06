@@ -1,0 +1,28 @@
+{
+  "name": "chord-explorer",
+  "version": "0.1.0",
+  "description": "A web application for exploring chord progressions with deep music theory support",
+  "private": true,
+  "scripts": {
+    "dev": "shadow-cljs watch app",
+    "build": "shadow-cljs release app",
+    "test": "shadow-cljs compile test",
+    "clean": "rm -rf target resources/public/js/compiled",
+    "server": "clj -M:run",
+    "repl": "shadow-cljs cljs-repl app"
+  },
+  "dependencies": {
+    "react": "^18.2.0",
+    "react-dom": "^18.2.0"
+  },
+  "devDependencies": {
+    "shadow-cljs": "^2.26.2"
+  },
+  "keywords": [
+    "music",
+    "theory",
+    "chords",
+    "clojurescript"
+  ],
+  "license": "MIT"
+}

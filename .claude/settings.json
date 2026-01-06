@@ -1,0 +1,23 @@
+{
+  "permissions": {
+    "defaultMode": "bypassPermissions",
+    "deny": [
+      "Read(./.env)",
+      "Read(./.env.*)",
+      "Read(./secrets/**)"
+    ]
+  },
+  "hooks": {
+    "PostToolUse": [
+      {
+        "matcher": "Edit|Write",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "if [[ \"$CLAUDE_FILE_PATHS\" == *\"src/cljc\"* ]] || [[ \"$CLAUDE_FILE_PATHS\" == *\"test/cljc\"* ]]; then cd /Users/stefansevelda/chord_learner && clj -M:test 2>&1 | tail -20; fi"
+          }
+        ]
+      }
+    ]
+  }
+}
